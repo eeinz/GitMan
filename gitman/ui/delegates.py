@@ -85,3 +85,97 @@ class BadgeDelegate(QStyledItemDelegate):
         size = super().sizeHint(option, index)
         size.setHeight(max(38, size.height()))
         return size
+
+
+class CommitCellDelegate(QStyledItemDelegate):
+    """Two-line commit cell: subject on top, date below."""
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index,
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        background = QColor("#ffffff")
+        brush = index.data(Qt.ItemDataRole.BackgroundRole)
+        if brush is not None and hasattr(brush, "color"):
+            background = brush.color()
+        if selected:
+            background = QColor("#eef2ff")
+        elif hovered:
+            background = QColor("#f8faff")
+        painter.fillRect(option.rect, background)
+
+        painter.setPen(QPen(QColor("#f1f4f9"), 1))
+        painter.drawLine(
+            option.rect.left(),
+            option.rect.bottom(),
+            option.rect.right(),
+            option.rect.bottom(),
+        )
+
+        subject = str(index.data(Roles.CommitSubject) or "")
+        date_text = str(index.data(Roles.CommitDate) or "")
+        left = option.rect.left() + 12
+        width = max(10, option.rect.width() - 24)
+
+        if not date_text:
+            font = QFont(option.font)
+            if font.pointSizeF() > 0:
+                font.setPointSizeF(max(8.0, font.pointSizeF() * 0.95))
+            painter.setFont(font)
+            painter.setPen(QColor("#94a3b8"))
+            metrics = QFontMetrics(font)
+            text = metrics.elidedText(
+                subject or "—", Qt.TextElideMode.ElideRight, width
+            )
+            painter.drawText(
+                QRect(left, option.rect.top() + 4, width, option.rect.height() - 8),
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                text,
+            )
+            painter.restore()
+            return
+
+        subject_font = QFont(option.font)
+        subject_font.setWeight(QFont.Weight.Medium)
+        if subject_font.pointSizeF() > 0:
+            subject_font.setPointSizeF(max(8.0, subject_font.pointSizeF() * 0.98))
+        painter.setFont(subject_font)
+        subject_metrics = QFontMetrics(subject_font)
+        subject_text = subject_metrics.elidedText(
+            subject, Qt.TextElideMode.ElideRight, width
+        )
+        painter.setPen(QColor("#1e293b"))
+        painter.drawText(
+            QRect(left, option.rect.top() + 5, width, 19),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            subject_text,
+        )
+
+        date_font = QFont(option.font)
+        if date_font.pointSizeF() > 0:
+            date_font.setPointSizeF(max(7.5, date_font.pointSizeF() * 0.82))
+        date_font.setWeight(QFont.Weight.Normal)
+        painter.setFont(date_font)
+        date_metrics = QFontMetrics(date_font)
+        date_display = date_metrics.elidedText(
+            date_text, Qt.TextElideMode.ElideRight, width
+        )
+        painter.setPen(QColor("#94a3b8"))
+        painter.drawText(
+            QRect(left, option.rect.top() + 23, width, 15),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            date_display,
+        )
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        size = super().sizeHint(option, index)
+        size.setHeight(max(44, size.height()))
+        return size

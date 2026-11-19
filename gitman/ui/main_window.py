@@ -62,7 +62,7 @@ from ..models import (
 )
 from ..workers import CommitDetailWorker, CommitListWorker, ScanRepoWorker
 from .about_dialog import AboutDialog
-from .delegates import BadgeDelegate
+from .delegates import BadgeDelegate, CommitCellDelegate
 from .dialogs import AddRepoDialog, EditRepoDialog
 from .formatting import (
     Badge,
@@ -114,7 +114,9 @@ class MainWindow(QMainWindow):
         self._commit_list_request = 0
         self._commit_detail_request = 0
         self._commits_repo_id: str | None = None
-        self._commits_head: str | None = None
+        self._commits_key: str | None = None
+        self._commit_scope = "local"
+        self._commit_scope_auto = True
         self._commit_cache: dict[tuple[str, str], CommitDetail] = {}
         self._startup_message = startup_message
 
@@ -207,10 +209,15 @@ class MainWindow(QMainWindow):
 
         self.refresh_button = QPushButton("⟳  一键刷新")
         self.refresh_button.setProperty("variant", "primary")
-        self.refresh_button.setToolTip("抓取远程并刷新所有仓库状态（F5）")
+        self.refresh_button.setToolTip(self._refresh_tooltip())
         self.refresh_button.clicked.connect(self.refresh_all)
         layout.addWidget(self.refresh_button)
         return header
+
+    def _refresh_tooltip(self) -> str:
+        if self.settings.fetch_on_refresh:
+            return "连接服务器获取最新修改记录，并刷新所有仓库状态（F5）"
+        return "仅刷新本地仓库状态；当前未启用“连接服务器”（F5）"
 
     def _build_repo_panel(self) -> QWidget:
         panel = QFrame()
@@ -247,14 +254,15 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(lambda _text: self._search_timer.start())
         top.addWidget(self.search_edit)
 
-        self.fetch_toggle = QPushButton("抓取远程")
+        self.fetch_toggle = QPushButton("连接服务器")
         self.fetch_toggle.setCheckable(True)
         self.fetch_toggle.setProperty("toggle", True)
         self.fetch_toggle.setChecked(self.settings.fetch_on_refresh)
         self.fetch_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fetch_toggle.setToolTip(
-            "开启后，一键刷新会先执行 git fetch --all --prune（只更新远程跟踪分支，不改工作区）。"
-            "\n关闭后仅比较已有的远程跟踪信息，状态可能过期。"
+            "开启后，一键刷新会连接远程服务器并执行 git fetch --all --prune，"
+            "获取服务器上的最新修改记录。\n"
+            "关闭后仅比较已有的远程跟踪信息，状态可能过期。"
         )
         self.fetch_toggle.toggled.connect(self._on_fetch_toggled)
         top.addWidget(self.fetch_toggle)
@@ -301,7 +309,7 @@ class MainWindow(QMainWindow):
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.doubleClicked.connect(lambda _index: self._open_selected_folder())
@@ -323,17 +331,16 @@ class MainWindow(QMainWindow):
             RepoTableModel.COLUMN_SYNC, QHeaderView.ResizeMode.Fixed
         )
         header.setSectionResizeMode(
-            RepoTableModel.COLUMN_COMMIT, QHeaderView.ResizeMode.Stretch
+            RepoTableModel.COLUMN_LOCAL_COMMIT, QHeaderView.ResizeMode.Stretch
         )
         header.setSectionResizeMode(
-            RepoTableModel.COLUMN_PATH, QHeaderView.ResizeMode.Interactive
+            RepoTableModel.COLUMN_REMOTE_COMMIT, QHeaderView.ResizeMode.Stretch
         )
         self.table.setColumnWidth(RepoTableModel.COLUMN_REPO, 175)
         self.table.setColumnWidth(RepoTableModel.COLUMN_CATEGORY, 78)
         self.table.setColumnWidth(RepoTableModel.COLUMN_BRANCH, 128)
         self.table.setColumnWidth(RepoTableModel.COLUMN_WORKTREE, 126)
         self.table.setColumnWidth(RepoTableModel.COLUMN_SYNC, 146)
-        self.table.setColumnWidth(RepoTableModel.COLUMN_PATH, 178)
 
         badge_delegate = BadgeDelegate(self.table)
         for column in (
@@ -342,6 +349,13 @@ class MainWindow(QMainWindow):
             RepoTableModel.COLUMN_SYNC,
         ):
             self.table.setItemDelegateForColumn(column, badge_delegate)
+
+        commit_delegate = CommitCellDelegate(self.table)
+        for column in (
+            RepoTableModel.COLUMN_LOCAL_COMMIT,
+            RepoTableModel.COLUMN_REMOTE_COMMIT,
+        ):
+            self.table.setItemDelegateForColumn(column, commit_delegate)
 
         self.table.selectionModel().currentChanged.connect(self._on_current_changed)
         return self.table
@@ -451,9 +465,28 @@ class MainWindow(QMainWindow):
         self.commit_hint.setObjectName("Hint")
         bar.addWidget(self.commit_hint)
         bar.addStretch(1)
+
+        self.commit_scope_group = QButtonGroup(self)
+        self.commit_scope_group.setExclusive(True)
+        self.commit_scope_server = QPushButton("服务器记录")
+        self.commit_scope_local = QPushButton("本地记录")
+        for index, button in enumerate(
+            (self.commit_scope_server, self.commit_scope_local)
+        ):
+            button.setCheckable(True)
+            button.setProperty("chip", True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.commit_scope_group.addButton(button, index)
+            bar.addWidget(button)
+        self.commit_scope_local.setChecked(True)
+        self.commit_scope_server.setEnabled(False)
+        self.commit_scope_server.setToolTip("连接服务器后显示服务器提交记录，并标记本地 HEAD 位置")
+        self.commit_scope_group.idClicked.connect(self._on_commit_scope_changed)
+
         self.commit_refresh_button = QPushButton("刷新提交")
         self.commit_refresh_button.setFlat(True)
         self.commit_refresh_button.setProperty("flat", True)
+        self.commit_refresh_button.setToolTip("重新读取当前范围内的提交记录（不连接服务器）")
         self.commit_refresh_button.clicked.connect(lambda: self._load_commits(force=True))
         bar.addWidget(self.commit_refresh_button)
         layout.addLayout(bar)
@@ -721,20 +754,74 @@ class MainWindow(QMainWindow):
             self._ensure_commits()
         self._scan_workers.clear()
 
+        failures = self._fetch_failures()
+        if failures and not self._closing:
+            self._show_fetch_failure_prompt(failures)
+
+    def _fetch_failures(self) -> list[tuple[RepoEntry, RepoStatus]]:
+        failures: list[tuple[RepoEntry, RepoStatus]] = []
+        for entry in self.entries:
+            status = self.model.status_for(entry.id)
+            if status is not None and status.ok and status.fetch_error:
+                failures.append((entry, status))
+        return failures
+
+    def _show_fetch_failure_prompt(
+        self, failures: list[tuple[RepoEntry, RepoStatus]]
+    ) -> None:
+        lines = "\n".join(
+            f"• {entry.name}\n  {status.fetch_error}" for entry, status in failures
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("连接服务器失败")
+        box.setText(
+            f"无法从服务器获取最新修改记录，{len(failures)} 个仓库连接失败。"
+        )
+        box.setInformativeText(
+            "本地仓库状态已刷新，但“远程新”“已同步”等远程信息可能不是最新。\n"
+            "请检查网络、代理或 Git 凭据后重新刷新。"
+        )
+        box.setDetailedText(lines)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        ok_button = box.button(QMessageBox.StandardButton.Ok)
+        if ok_button is not None:
+            ok_button.setText("知道了")
+        box.exec()
+
     def _update_scan_label(self) -> None:
         if self._refresh_active:
+            self.scan_label.setStyleSheet("")
             self.scan_label.setText(f"正在刷新 {self._scan_done}/{self._scan_total} …")
             return
         if self._last_refresh:
-            self.scan_label.setText(
-                f"上次刷新 {self._last_refresh.strftime('%H:%M:%S')} · {len(self.entries)} 个仓库"
-            )
+            failures = self._fetch_failures()
+            if failures:
+                self.scan_label.setStyleSheet("color: #b91c1c;")
+                self.scan_label.setText(
+                    f"连接服务器失败 · {len(failures)} 个仓库 · "
+                    f"上次刷新 {self._last_refresh.strftime('%H:%M:%S')}"
+                )
+            elif not self.settings.fetch_on_refresh:
+                self.scan_label.setStyleSheet("")
+                self.scan_label.setText(
+                    f"上次刷新 {self._last_refresh.strftime('%H:%M:%S')} · 未连接服务器"
+                )
+            else:
+                self.scan_label.setStyleSheet("")
+                self.scan_label.setText(
+                    f"上次刷新 {self._last_refresh.strftime('%H:%M:%S')} · "
+                    f"{len(self.entries)} 个仓库"
+                )
         else:
+            self.scan_label.setStyleSheet("")
             self.scan_label.setText("尚未刷新")
 
     def _on_fetch_toggled(self, checked: bool) -> None:
         self.settings.fetch_on_refresh = checked
+        self.refresh_button.setToolTip(self._refresh_tooltip())
         self._save_config()
+        self._update_scan_label()
 
     # ==================================================================== filters
     def _on_category_filter(self, button_id: int) -> None:
@@ -777,6 +864,9 @@ class MainWindow(QMainWindow):
             self._selected_repo_id = None
             self._update_detail_panel(None)
             return
+        if entry.id != self._selected_repo_id:
+            self._commit_scope_auto = True
+            self._set_commit_scope("local")
         self._selected_repo_id = entry.id
         self._update_detail_panel(entry)
         self._ensure_commits()
@@ -806,8 +896,12 @@ class MainWindow(QMainWindow):
             self.detail_path.setText("")
             self.detail_note.setText("")
             self.open_button.setEnabled(False)
+            self._commit_scope_auto = True
+            self._set_commit_scope("local")
+            self.commit_scope_server.setEnabled(False)
+            self.commit_scope_server.setText("服务器记录")
             self.commit_branch_label.setText("提交记录")
-            self.commit_hint.setText("选择仓库后加载当前分支提交")
+            self.commit_hint.setText("选择仓库后加载服务器提交记录")
             self.commit_table.setRowCount(0)
             self._clear_commit_detail("选择一条提交后，可查看变更文件和完整补丁。")
             self.worktree_title.setText("工作区变更")
@@ -850,14 +944,14 @@ class MainWindow(QMainWindow):
             if status.remote_url:
                 pieces.append(status.remote_url)
             if status.fetch_error:
-                pieces.append("远程抓取失败，远程状态可能过期")
+                pieces.append("连接服务器失败，远程状态可能过期")
             self.detail_note.setText(" · ".join(item for item in pieces if item))
             self.detail_note.setToolTip(
                 "\n".join(
                     item
                     for item in (
                         status.sync_note,
-                        f"远程抓取失败：{status.fetch_error}" if status.fetch_error else "",
+                        f"连接服务器失败：{status.fetch_error}" if status.fetch_error else "",
                     )
                     if item
                 )
@@ -940,6 +1034,40 @@ class MainWindow(QMainWindow):
         return "#b45309"
 
     # ==================================================================== commits
+    def _set_commit_scope(self, scope: str) -> None:
+        self._commit_scope = "server" if scope == "server" else "local"
+        self._commits_key = None
+        if hasattr(self, "commit_scope_local"):
+            self.commit_scope_server.setChecked(self._commit_scope == "server")
+            self.commit_scope_local.setChecked(self._commit_scope == "local")
+
+    @staticmethod
+    def _server_scope_available(status: RepoStatus) -> bool:
+        return bool(
+            status.ok
+            and status.fetch_performed
+            and not status.fetch_error
+            and status.compare_ref
+            and status.remote_commit
+        )
+
+    def _commit_revision(self, status: RepoStatus) -> tuple[str, str]:
+        if self._commit_scope == "server" and self._server_scope_available(status):
+            remote_hash = status.remote_commit.hash if status.remote_commit else ""
+            return (
+                status.compare_ref,
+                f"server:{status.compare_ref}:{remote_hash}:{status.head_hash}",
+            )
+        return "HEAD", f"local:{status.head_hash}"
+
+    def _on_commit_scope_changed(self, button_id: int) -> None:
+        scope = "server" if button_id == 0 else "local"
+        self._commit_scope_auto = False
+        if scope == self._commit_scope:
+            return
+        self._set_commit_scope(scope)
+        self._load_commits(force=True)
+
     def _ensure_commits(self) -> None:
         if self._closing:
             return
@@ -948,26 +1076,62 @@ class MainWindow(QMainWindow):
             return
         status = self.model.status_for(entry.id)
         if status is None:
+            self.commit_scope_server.setEnabled(False)
+            self.commit_scope_server.setText("服务器记录")
             if self._refresh_active:
-                self.commit_hint.setText("仓库刷新中，完成后加载提交")
+                self.commit_hint.setText("仓库刷新中，完成后加载服务器提交记录")
             return
         if not status.ok:
             self.commit_table.setRowCount(0)
             self._commits_repo_id = entry.id
-            self._commits_head = None
+            self._commits_key = None
             self._commit_detail_request += 1
+            self._commit_scope_auto = True
+            self._set_commit_scope("local")
+            self.commit_scope_server.setEnabled(False)
+            self.commit_scope_server.setText("服务器记录")
             self.commit_branch_label.setText("提交记录")
             self.commit_hint.setText(f"读取失败：{status.error}")
             self._clear_commit_detail("仓库不可用，无法读取提交。")
             return
+
+        server_available = self._server_scope_available(status)
+        self.commit_scope_server.setEnabled(server_available)
+        self.commit_scope_server.setText("服务器记录")
+        if server_available:
+            server_tip = (
+                f"显示服务器分支 {status.compare_ref} 的提交记录，"
+                "并标记本地 HEAD 所在位置"
+            )
+        elif status.fetch_error:
+            server_tip = "连接服务器失败，已回退到本地提交记录"
+        elif status.compare_ref and not status.fetch_performed:
+            server_tip = "未连接服务器，当前显示本地提交记录"
+        elif not status.compare_ref:
+            server_tip = "当前分支没有可比较的远程分支"
+        else:
+            server_tip = "暂时无法读取服务器提交记录"
+        self.commit_scope_server.setToolTip(server_tip)
+
+        if server_available and self._commit_scope_auto:
+            if self._commit_scope != "server":
+                self._set_commit_scope("server")
+        elif not server_available and self._commit_scope == "server":
+            self._set_commit_scope("local")
+            self._commit_scope_auto = True
+
         if self._commits_repo_id != entry.id:
-            self._commits_head = None
-        branch_label = "分离 HEAD" if status.detached else status.branch
-        if branch_label:
-            self.commit_branch_label.setText(f"分支 {branch_label}")
+            self._commits_key = None
+        if self._commit_scope == "server" and server_available:
+            self.commit_branch_label.setText(f"服务器记录 · {status.compare_ref}")
+        else:
+            branch_label = "分离 HEAD" if status.detached else status.branch
+            if branch_label:
+                self.commit_branch_label.setText(f"本地记录 · {branch_label}")
+        revision, key = self._commit_revision(status)
         if (
             self._commits_repo_id == entry.id
-            and self._commits_head == status.head_hash
+            and self._commits_key == key
             and self.commit_table.rowCount() > 0
         ):
             return
@@ -981,10 +1145,14 @@ class MainWindow(QMainWindow):
         if status is None or not status.ok:
             self.commit_hint.setText("等待仓库刷新完成后加载提交")
             return
+
+        if self._commit_scope == "server" and not self._server_scope_available(status):
+            self._set_commit_scope("local")
+        revision, key = self._commit_revision(status)
         if (
             not force
             and self._commits_repo_id == entry.id
-            and self._commits_head == status.head_hash
+            and self._commits_key == key
             and self.commit_table.rowCount() > 0
         ):
             return
@@ -993,11 +1161,18 @@ class MainWindow(QMainWindow):
         request_id = self._commit_list_request
         self._commit_detail_request += 1
         self._commits_repo_id = entry.id
-        self._commits_head = status.head_hash
+        self._commits_key = key
         self.commit_table.setRowCount(0)
-        self.commit_branch_label.setText("提交记录")
-        self.commit_hint.setText("正在读取提交记录…")
-        self._clear_commit_detail("正在读取提交记录…")
+        if self._commit_scope == "server":
+            self.commit_branch_label.setText(f"服务器记录 · {status.compare_ref}")
+            self.commit_hint.setText("正在读取服务器提交记录…")
+            detail_hint = "正在读取服务器提交记录…"
+        else:
+            branch = "分离 HEAD" if status.detached else (status.branch or "—")
+            self.commit_branch_label.setText(f"本地记录 · {branch}")
+            self.commit_hint.setText("正在读取本地提交记录…")
+            detail_hint = "正在读取本地提交记录…"
+        self._clear_commit_detail(detail_hint)
 
         worker = CommitListWorker(
             self.service,
@@ -1005,6 +1180,7 @@ class MainWindow(QMainWindow):
             entry.path,
             request_id,
             self.COMMIT_LIMIT,
+            revision,
         )
         worker.signals.loaded.connect(self._on_commits_loaded)
         worker.signals.failed.connect(self._on_commits_failed)
@@ -1021,12 +1197,48 @@ class MainWindow(QMainWindow):
         entry = self._selected_entry()
         if entry is None:
             return
-        branch = "—"
         status = self.model.status_for(entry.id)
-        if status:
-            branch = "分离 HEAD" if status.detached else status.branch
-        self.commit_branch_label.setText(f"分支 {branch}")
-        self.commit_hint.setText(f"{len(commits)} 条提交")
+        server_scope = self._commit_scope == "server" and status is not None
+        local_head = status.head_hash if status else ""
+        local_position = 0
+        if server_scope:
+            compare_ref = status.compare_ref or "远程分支"
+            self.commit_branch_label.setText(f"服务器记录 · {compare_ref}")
+            for index, commit in enumerate(commits):
+                if local_head and commit.hash == local_head:
+                    local_position = index + 1
+                    break
+            if local_position:
+                hint = (
+                    f"{len(commits)} 条服务器提交 · "
+                    f"本地 HEAD 位于第 {local_position} 条（●）"
+                )
+            else:
+                hint = f"{len(commits)} 条服务器提交 · "
+                if status.ahead and status.behind:
+                    hint += (
+                        f"本地 HEAD 与服务器记录已分叉"
+                        f"（+{status.ahead}/-{status.behind}）"
+                    )
+                elif status.ahead:
+                    hint += f"本地 HEAD 在服务器记录之后（本地领先 {status.ahead} 条）"
+                elif not local_head:
+                    hint += "本地没有提交"
+                else:
+                    hint += "本地 HEAD 不在当前显示的服务器记录中"
+            self.commit_hint.setText(hint)
+        else:
+            branch = "—"
+            if status:
+                branch = "分离 HEAD" if status.detached else status.branch
+            self.commit_branch_label.setText(f"本地记录 · {branch}")
+            hint = f"{len(commits)} 条本地提交"
+            if status and status.fetch_error:
+                hint += " · 连接服务器失败，已显示本地记录"
+            elif status and status.compare_ref and not status.fetch_performed:
+                hint += " · 未连接服务器，已显示本地记录"
+            self.commit_hint.setText(hint)
+
         self.commit_table.setUpdatesEnabled(False)
         self.commit_table.blockSignals(True)
         try:
@@ -1035,6 +1247,9 @@ class MainWindow(QMainWindow):
             mono.setStyleHint(QFont.StyleHint.Monospace)
             mono.setPointSize(8)
             for row, commit in enumerate(commits):
+                is_local_head = bool(
+                    server_scope and local_head and commit.hash == local_head
+                )
                 date_item = QTableWidgetItem(commit.date_display)
                 date_item.setForeground(QColor("#64748b"))
                 date_item.setToolTip(commit.date)
@@ -1046,13 +1261,30 @@ class MainWindow(QMainWindow):
                 author_item = QTableWidgetItem(commit.author)
                 author_item.setForeground(QColor("#475569"))
                 author_item.setToolTip(commit.email)
-                subject_item = QTableWidgetItem(commit.subject)
+                subject_text = commit.subject
+                if is_local_head:
+                    subject_text = f"● 本地 HEAD · {subject_text}"
+                subject_item = QTableWidgetItem(subject_text)
+                tooltip_subject = commit.subject
+                if is_local_head:
+                    tooltip_subject += "\n\n● 这里就是本地 HEAD 所在位置"
                 if commit.refs:
-                    subject_item.setToolTip(f"{commit.subject}\n\n{commit.refs}")
+                    subject_item.setToolTip(f"{tooltip_subject}\n\n{commit.refs}")
+                elif is_local_head:
+                    subject_item.setToolTip(tooltip_subject)
                 self.commit_table.setItem(row, 0, date_item)
                 self.commit_table.setItem(row, 1, hash_item)
                 self.commit_table.setItem(row, 2, author_item)
                 self.commit_table.setItem(row, 3, subject_item)
+                if is_local_head:
+                    subject_item.setForeground(QColor("#1d4ed8"))
+                    font = QFont(subject_item.font())
+                    font.setWeight(QFont.Weight.DemiBold)
+                    subject_item.setFont(font)
+                    for column in range(4):
+                        item = self.commit_table.item(row, column)
+                        if item is not None:
+                            item.setBackground(QColor("#eef4ff"))
         finally:
             self.commit_table.blockSignals(False)
             self.commit_table.setUpdatesEnabled(True)
@@ -1061,15 +1293,22 @@ class MainWindow(QMainWindow):
             self.commit_table.selectRow(0)
             self._on_commit_selection_changed()
         else:
-            self._clear_commit_detail("这个仓库还没有提交记录。")
-            self.commit_hint.setText("0 条提交")
+            if server_scope:
+                self._clear_commit_detail("服务器分支还没有提交记录。")
+                self.commit_hint.setText("0 条服务器提交")
+            else:
+                self._clear_commit_detail("这个仓库还没有本地提交记录。")
+                self.commit_hint.setText("0 条本地提交")
 
     def _on_commits_failed(self, repo_id: str, request_id: int, message: str) -> None:
         if request_id != self._commit_list_request or repo_id != self._selected_repo_id:
             return
         self._commit_detail_request += 1
         self.commit_table.setRowCount(0)
-        self.commit_branch_label.setText("提交记录")
+        if self._commit_scope == "server":
+            self.commit_branch_label.setText("服务器记录")
+        else:
+            self.commit_branch_label.setText("本地记录")
         self.commit_hint.setText(f"读取失败：{message}")
         self._clear_commit_detail("无法读取提交记录。")
 
@@ -1347,7 +1586,7 @@ class MainWindow(QMainWindow):
         if errors:
             parts.append(f"{errors} 个异常")
         if fetch_errors:
-            parts.append(f"{fetch_errors} 个抓取失败")
+            parts.append(f"{fetch_errors} 个连接失败")
         if len(known) < len(self.entries):
             parts.append(f"{len(self.entries) - len(known)} 个待刷新")
         self.summary_label.setText(" · ".join(parts))
@@ -1390,7 +1629,7 @@ class MainWindow(QMainWindow):
         commit_state = settings.value("window/commit_splitter")
         if commit_state:
             self.commit_splitter.restoreState(commit_state)
-        header_state = settings.value("window/table_header")
+        header_state = settings.value("window/table_header_v2")
         if header_state:
             self.table.horizontalHeader().restoreState(header_state)
 
@@ -1399,7 +1638,7 @@ class MainWindow(QMainWindow):
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/main_splitter", self.main_splitter.saveState())
         settings.setValue("window/commit_splitter", self.commit_splitter.saveState())
-        settings.setValue("window/table_header", self.table.horizontalHeader().saveState())
+        settings.setValue("window/table_header_v2", self.table.horizontalHeader().saveState())
         settings.sync()
 
     def closeEvent(self, event) -> None:

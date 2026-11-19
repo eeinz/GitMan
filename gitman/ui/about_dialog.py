@@ -24,7 +24,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .. import __version__
+from .. import (
+    __author__,
+    __email__,
+    __license__,
+    __release_date__,
+    __version__,
+)
 from .theme import make_app_icon
 
 
@@ -63,8 +69,8 @@ class AboutDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 24, 28, 22)
-        root.setSpacing(14)
+        root.setContentsMargins(26, 18, 26, 18)
+        root.setSpacing(12)
 
         header = QHBoxLayout()
         header.setSpacing(18)
@@ -99,13 +105,34 @@ class AboutDialog(QDialog):
 
         description = QLabel(
             "集中管理多个本地 Git 仓库，按私有 / 共享分类，快速查看分支、"
-            "工作区变更以及本地与远程的提交差异。\n"
-            "copyright © 2026 eein@163.com, MIT License.\n"
-            "任何人都可以免费使用、修改和分发 GitMan，遇到问题可以在 GitHub 上提交 issue 或 pull request。或直接联系作者邮箱 eein@163.com\n"
+            "工作区变更以及本地与远程的提交差异。"
         )
         description.setObjectName("Hint")
         description.setWordWrap(True)
         title_box.addWidget(description)
+
+        usage = QLabel(
+            "GitMan 对仓库只读（刷新仅执行 git fetch）；可免费使用、修改和分发，"
+            "问题可通过 GitHub issue / pull request 或邮箱反馈。"
+        )
+        usage.setObjectName("Hint")
+        usage.setWordWrap(True)
+        title_box.addWidget(usage)
+
+        meta = QLabel(
+            f"软件署名：<b>{__author__}</b>"
+            f" &nbsp;·&nbsp; 联系邮箱："
+            f'<a href="mailto:{__email__}" style="color:#4f46e5;text-decoration:none;">'
+            f"{__email__}</a>"
+            f" &nbsp;·&nbsp; 发布日期：<b>{__release_date__}</b>"
+        )
+        meta.setObjectName("Muted")
+        meta.setWordWrap(True)
+        meta.setTextFormat(Qt.TextFormat.RichText)
+        meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        meta.setOpenExternalLinks(True)
+        meta.setToolTip(f"联系邮箱：{__email__}")
+        title_box.addWidget(meta)
         header.addLayout(title_box, 1)
         root.addLayout(header)
 
@@ -115,7 +142,7 @@ class AboutDialog(QDialog):
         root.addWidget(self._build_config_section())
 
         footer = QLabel(
-            "GitMan 对仓库保持只读；刷新时仅执行 git fetch 更新远程跟踪引用。"
+            f"Copyright © 2026 {__author__} · {__license__} License"
         )
         footer.setObjectName("Hint")
         footer.setWordWrap(True)

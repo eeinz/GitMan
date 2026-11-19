@@ -93,7 +93,7 @@ def sync_badge(status: RepoStatus | None, loading: bool = False) -> Badge:
     if status.fetch_performed:
         notes.append("刷新时已执行 git fetch")
     if status.fetch_error:
-        notes.append(f"远程抓取失败：{status.fetch_error}（远程数据可能不是最新）")
+        notes.append(f"连接服务器失败：{status.fetch_error}（远程数据可能不是最新）")
     tooltip = "\n".join(dict.fromkeys(notes))
 
     if status.sync_state == SYNC_SYNCED:

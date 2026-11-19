@@ -228,7 +228,9 @@ class GitService:
                     status.sync_note = f"未设置上游分支，正在与 {compare_ref} 比较"
 
             status.changes = self._working_changes(root)
-            status.last_commit = self._last_commit(root)
+            status.last_commit = self._commit_at(root, "HEAD")
+            if compare_ref:
+                status.remote_commit = self._commit_at(root, compare_ref)
             status.ok = True
         except GitServiceError as exc:
             status.error = str(exc)
@@ -308,7 +310,9 @@ class GitService:
             changes.append(WorkingChange(x=x, y=y, path=path, orig_path=orig_path))
         return changes
 
-    def _last_commit(self, root: Path) -> CommitInfo | None:
+    def _commit_at(self, root: Path, revision: str) -> CommitInfo | None:
+        if not revision or revision.startswith("-"):
+            return None
         result = self.run(
             root,
             [
@@ -317,6 +321,7 @@ class GitService:
                 "--no-show-signature",
                 "--date=iso-strict",
                 "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D",
+                revision,
             ],
         )
         if not result.ok:
@@ -324,9 +329,16 @@ class GitService:
         return self._parse_commit_line(result.stdout.strip())
 
     # ----------------------------------------------------------------- commits
-    def list_commits(self, path: str | Path, limit: int = 200) -> list[CommitInfo]:
+    def list_commits(
+        self,
+        path: str | Path,
+        limit: int = 200,
+        revision: str = "HEAD",
+    ) -> list[CommitInfo]:
         root = self.probe_repository(path)
         limit = max(1, min(int(limit), 1000))
+        if not revision or revision.startswith("-"):
+            raise GitServiceError("提交范围格式不正确")
         head = self.run(root, ["rev-parse", "--verify", "HEAD"])
         if not head.ok:
             return []
@@ -339,7 +351,7 @@ class GitService:
                 "--no-show-signature",
                 "--date=iso-strict",
                 "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D",
-                "HEAD",
+                revision,
             ],
         )
         if not result.ok:

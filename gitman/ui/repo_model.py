@@ -27,17 +27,27 @@ class Roles:
     BadgeText = int(Qt.ItemDataRole.UserRole) + 2
     BadgeFg = int(Qt.ItemDataRole.UserRole) + 3
     BadgeBg = int(Qt.ItemDataRole.UserRole) + 4
+    CommitSubject = int(Qt.ItemDataRole.UserRole) + 5
+    CommitDate = int(Qt.ItemDataRole.UserRole) + 6
 
 
 class RepoTableModel(QAbstractTableModel):
-    HEADERS = ("仓库", "分类", "当前分支", "工作区", "同步状态", "最近提交", "本地路径")
+    HEADERS = (
+        "仓库",
+        "分类",
+        "当前分支",
+        "工作区",
+        "同步状态",
+        "本地最新提交",
+        "服务器最新提交",
+    )
     COLUMN_REPO = 0
     COLUMN_CATEGORY = 1
     COLUMN_BRANCH = 2
     COLUMN_WORKTREE = 3
     COLUMN_SYNC = 4
-    COLUMN_COMMIT = 5
-    COLUMN_PATH = 6
+    COLUMN_LOCAL_COMMIT = 5
+    COLUMN_REMOTE_COMMIT = 6
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -80,17 +90,17 @@ class RepoTableModel(QAbstractTableModel):
                 return worktree_badge(status, loading).text
             if column == self.COLUMN_SYNC:
                 return sync_badge(status, loading).text
-            if column == self.COLUMN_COMMIT:
-                if loading and not status:
-                    return "读取中…"
-                if status and not status.ok:
-                    return status.error
-                if status and status.last_commit:
-                    return status.last_commit.subject
-                return "（无提交）" if status else "—"
-            if column == self.COLUMN_PATH:
-                return entry.path
+            if column in (self.COLUMN_LOCAL_COMMIT, self.COLUMN_REMOTE_COMMIT):
+                subject, date = self._commit_parts(status, loading, column)
+                return f"{date} {subject}".strip()
             return None
+
+        if role in (Roles.CommitSubject, Roles.CommitDate) and column in {
+            self.COLUMN_LOCAL_COMMIT,
+            self.COLUMN_REMOTE_COMMIT,
+        }:
+            subject, date = self._commit_parts(status, loading, column)
+            return subject if role == Roles.CommitSubject else date
 
         if role == Roles.BadgeText and column in {
             self.COLUMN_CATEGORY,
@@ -129,12 +139,6 @@ class RepoTableModel(QAbstractTableModel):
                 return QBrush(QColor("#b91c1c" if status and not status.ok else "#0f172a"))
             if column == self.COLUMN_BRANCH:
                 return QBrush(QColor("#475569"))
-            if column == self.COLUMN_COMMIT:
-                if status and not status.ok:
-                    return QBrush(QColor("#b91c1c"))
-                return QBrush(QColor("#475569"))
-            if column == self.COLUMN_PATH:
-                return QBrush(QColor("#94a3b8"))
             return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -157,6 +161,32 @@ class RepoTableModel(QAbstractTableModel):
         if column == self.COLUMN_WORKTREE:
             return worktree_badge(status, loading)
         return sync_badge(status, loading)
+
+    def _commit_parts(
+        self,
+        status: RepoStatus | None,
+        loading: bool,
+        column: int,
+    ) -> tuple[str, str]:
+        if loading and status is None:
+            return "读取中…", ""
+        if status is None:
+            return "—", ""
+        if not status.ok:
+            return "—", ""
+
+        if column == self.COLUMN_LOCAL_COMMIT:
+            commit = status.last_commit
+            if commit is None:
+                return "（无提交）", ""
+            return commit.subject or "（无提交说明）", commit.date_display
+
+        if not status.compare_ref:
+            return "未关联远程", ""
+        commit = status.remote_commit
+        if commit is None:
+            return "（无提交）", ""
+        return commit.subject or "（无提交说明）", commit.date_display
 
     def _tooltip(
         self,
@@ -184,19 +214,41 @@ class RepoTableModel(QAbstractTableModel):
             return worktree_badge(status, loading).tooltip
         if column == self.COLUMN_SYNC:
             return sync_badge(status, loading).tooltip
-        if column == self.COLUMN_COMMIT:
-            if not status:
-                return "尚未读取最近提交"
+        if column == self.COLUMN_LOCAL_COMMIT:
+            if status is None:
+                return "尚未读取本地最近提交"
             if not status.ok:
                 return status.error
             commit = status.last_commit
-            if not commit:
-                return "仓库还没有提交"
+            if commit is None:
+                return "本地仓库还没有提交"
             return (
-                f"{commit.hash}\n{commit.author} · {commit.date_display}\n\n{commit.subject}"
+                "本地最新提交\n"
+                f"{commit.short_hash} · {commit.date_display}\n"
+                f"{commit.author} <{commit.email}>\n\n{commit.subject}"
             )
-        if column == self.COLUMN_PATH:
-            return entry.path
+        if column == self.COLUMN_REMOTE_COMMIT:
+            if status is None:
+                return "尚未读取服务器最近提交"
+            if not status.ok:
+                return status.error
+            if not status.compare_ref:
+                return "当前分支没有可比较的远程分支"
+            commit = status.remote_commit
+            if commit is None:
+                return f"远程分支 {status.compare_ref} 没有提交"
+            lines = [
+                "服务器最新提交",
+                f"远程分支：{status.compare_ref}",
+                f"{commit.short_hash} · {commit.date_display}",
+                f"{commit.author} <{commit.email}>",
+                "",
+                commit.subject,
+            ]
+            if status.fetch_error:
+                lines.append("")
+                lines.append("连接服务器失败，以上远程信息可能不是最新。")
+            return "\n".join(lines)
         return ""
 
     # ------------------------------------------------------------- mutations
@@ -232,6 +284,8 @@ class RepoTableModel(QAbstractTableModel):
                     Roles.BadgeText,
                     Roles.BadgeFg,
                     Roles.BadgeBg,
+                    Roles.CommitSubject,
+                    Roles.CommitDate,
                 ],
             )
 
@@ -252,6 +306,8 @@ class RepoTableModel(QAbstractTableModel):
                 Roles.BadgeText,
                 Roles.BadgeFg,
                 Roles.BadgeBg,
+                Roles.CommitSubject,
+                Roles.CommitDate,
             ],
         )
 

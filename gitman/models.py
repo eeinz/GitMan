@@ -179,6 +179,7 @@ class RepoStatus:
     fetch_error: str = ""
     changes: list[WorkingChange] = field(default_factory=list)
     last_commit: CommitInfo | None = None
+    remote_commit: CommitInfo | None = None
     scanned_at: datetime = field(default_factory=datetime.now)
     duration_ms: int = 0
 

@@ -67,6 +67,9 @@ class GitServiceTests(unittest.TestCase):
         self.assertEqual(status.upstream, "origin/main")
         self.assertIsNotNone(status.last_commit)
         self.assertEqual(status.last_commit.subject, "initial commit")
+        self.assertIsNotNone(status.remote_commit)
+        self.assertEqual(status.remote_commit.subject, "initial commit")
+        self.assertEqual(status.remote_commit.hash, status.last_commit.hash)
 
     def test_local_dirty_and_ahead(self) -> None:
         (self.repo / "README.md").write_text("hello local\n", encoding="utf-8")
@@ -92,6 +95,15 @@ class GitServiceTests(unittest.TestCase):
         self.assertEqual(status.sync_state, SYNC_REMOTE_AHEAD)
         self.assertEqual(status.behind, 1)
         self.assertEqual(status.ahead, 0)
+        self.assertIsNotNone(status.remote_commit)
+        self.assertEqual(status.remote_commit.subject, "remote change")
+        self.assertEqual(status.last_commit.subject, "initial commit")
+
+        remote_commits = self.service.list_commits(
+            self.repo, revision="HEAD..origin/main"
+        )
+        self.assertEqual(len(remote_commits), 1)
+        self.assertEqual(remote_commits[0].subject, "remote change")
 
     def test_diverged(self) -> None:
         (self.repo / "local.txt").write_text("local\n", encoding="utf-8")
@@ -108,6 +120,8 @@ class GitServiceTests(unittest.TestCase):
         self.assertEqual(status.sync_state, SYNC_DIVERGED)
         self.assertEqual(status.ahead, 1)
         self.assertEqual(status.behind, 1)
+        self.assertEqual(status.last_commit.subject, "local change")
+        self.assertEqual(status.remote_commit.subject, "remote change")
 
     def test_untracked_branch_compares_with_remote_namesake(self) -> None:
         git(self.repo, "branch", "--unset-upstream")

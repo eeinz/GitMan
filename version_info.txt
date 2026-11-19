@@ -14,14 +14,15 @@ VSVersionInfo(
     StringFileInfo([
       StringTable(
         '080404B0',
-        [StringStruct('CompanyName', 'GitMan'),
+        [StringStruct('CompanyName', 'eein'),
          StringStruct('FileDescription', 'GitMan 多仓库状态看板'),
-         StringStruct('FileVersion', '1.0.0.0'),
+         StringStruct('FileVersion', '1.0.1.0'),
          StringStruct('InternalName', 'GitMan'),
-         StringStruct('LegalCopyright', 'Copyright (C) 2026 GitMan'),
+         StringStruct('LegalCopyright', 'Copyright (C) 2026 eein'),
          StringStruct('OriginalFilename', 'GitMan.exe'),
          StringStruct('ProductName', 'GitMan'),
-         StringStruct('ProductVersion', '1.0.0.0')]
+         StringStruct('ProductVersion', '1.0.1.0'),
+         StringStruct('Comments', 'Author: eein | Contact: eein@163.com | Release: 2026-11-19')]
       )
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

@@ -58,6 +58,7 @@ class CommitListWorker(QRunnable):
         path: str,
         request_id: int,
         limit: int = 200,
+        revision: str = "HEAD",
     ):
         super().__init__()
         self.service = service
@@ -65,13 +66,16 @@ class CommitListWorker(QRunnable):
         self.path = path
         self.request_id = request_id
         self.limit = limit
+        self.revision = revision
         self.signals = CommitListSignals()
         self.setAutoDelete(True)
 
     @Slot()
     def run(self) -> None:
         try:
-            commits = self.service.list_commits(self.path, self.limit)
+            commits = self.service.list_commits(
+                self.path, self.limit, self.revision
+            )
         except Exception as exc:
             LOGGER.warning("Loading commits failed for %s: %s", self.path, exc)
             self._emit_failure(str(exc))
